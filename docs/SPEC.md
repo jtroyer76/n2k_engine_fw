@@ -2,7 +2,7 @@
 
 Firmware for the [Hat Labs HALMET](https://docs.hatlabs.fi/halmet/) that measures engine temperatures with 1-Wire probes and sends them on NMEA 2000, so chartplotters and Signal K see them without WiFi.
 
-Status: draft, 2026-10-30. Nothing built yet. Claims not yet checked on hardware are marked **(verify)**.
+Status: 2026-10-30, phases 1, 2, 4 and the digital inputs of phase 5 implemented; not yet tested with probes or on a bus. Claims not yet checked on hardware are marked **(verify)**.
 
 ## 1. Goals
 
@@ -15,8 +15,8 @@ Status: draft, 2026-10-30. Nothing built yet. Claims not yet checked on hardware
 ## 2. Non-goals (v1)
 
 - RPM / tachometer input. Left for a later phase, for installs with no other RPM source.
-- Alarm thresholds. Log a baseline first; thresholds come in a later phase.
-- Analog senders (oil pressure, tank levels) and digital alarm inputs. Later phases.
+- Default alarm thresholds. Thresholds are configurable but off until set from a logged baseline.
+- Analog senders (oil pressure, tank levels). Later phase.
 - Signal K as a data path. Only if a value can't be expressed on NMEA 2000 (§6.4).
 
 ## 3. Hardware
@@ -34,7 +34,7 @@ Status: draft, 2026-10-30. Nothing built yet. Claims not yet checked on hardware
 | `coolant` | Thermostat housing / coolant outlet, clamped | Heat exchanger, thermostat, coolant loss. A surface probe reads below true coolant temperature; alarm against a logged baseline. |
 | `engine_room` | Air in the engine compartment, away from hot surfaces | Ventilation, general overheating |
 
-Each role is configured with a DS18B20 ROM address (64-bit). A role with no address is not sent. Unknown probes found on the bus are listed in the debug view so they can be assigned.
+Each role is configured with a DS18B20 ROM address (64-bit). At boot, a role with no address takes the next probe found on the bus (SensESP OneWire behaviour); after that it keeps that address until changed in the web UI. Probes found but not used by any role are listed on the status page under "Unassigned probes". The bus is scanned only at boot, so a probe added later needs a restart. A role with no probe sends "not available".
 
 ## 5. NMEA 2000 output
 
@@ -44,9 +44,10 @@ PGN choices are based on what Raymarine Axiom (LightHouse 4) receives and displa
 
 - Field "Temperature" (K, 0.01 resolution). Axiom LH4 shows it as "Coolant temperature (PGN 127489)". Signal K maps it to `propulsion.<id>.temperature` (not `coolantTemperature`, which comes only from J1939).
 - **Engine instance** configurable, default 0. Must match the instance used by whatever sends 127488 (RPM) for the same engine, so displays and Signal K treat them as one engine. Signal K names instance 0 `port` and 1 `starboard` (`propulsion.port.temperature` for a single engine).
-- All other fields sent as "not available". Discrete status bits all clear in v1.
+- All other fields sent as "not available" (including engine load and torque; the example sender would have sent 0 for those).
+- Discrete Status 1 bits: Over Temperature (coolant alarm or D3 input), Water Flow (exhaust alarm: an overheating wet exhaust means raw-water flow has dropped), Low Oil Pressure (D2 input), Check Engine (any of these). Axiom LH4 raises "Generic engine alerts" from 127489 **(verify which bits it shows)**.
 - Interval 500 ms (the PGN's standard rate).
-- Built on `N2kEngineParameterDynamicSender` from the HALMET example firmware.
+- Own sender (`N2kEngineTemperatureSender`), modelled on the HALMET example's `N2kEngineParameterDynamicSender`.
 
 ### 5.2 Exhaust → PGN 130316 Temperature, Extended Range
 
@@ -70,7 +71,8 @@ PGN choices are based on what Raymarine Axiom (LightHouse 4) receives and displa
 ### 5.5 Missing or failed probe
 
 - A probe that stops answering is sent as "not available" (data value absent), never its last good reading. Displays then show dashes instead of a frozen number.
-- A reading of exactly 85.0 °C on the first conversion is the DS18B20 power-on value and is discarded **(verify the library already does this)**.
+- A reading of exactly 85.0 °C is the DS18B20 power-on value. It is dropped when it is a probe's first reading or a jump of more than 10 °C from the previous one; a real 85 °C reached gradually passes. (The SensESP OneWire library doesn't filter it; it waits for the conversion, which avoids most cases.)
+- A probe with no good reading for 10 s is shown as "no reading" and its alarm clears; the N2K value expires to "not available" after 10 s.
 
 ## 6. Configuration and WiFi
 
@@ -78,36 +80,39 @@ PGN choices are based on what Raymarine Axiom (LightHouse 4) receives and displa
 
 Through SensESP's web UI, stored on the device:
 
-- Per role: probe address, enabled, N2K instance, temperature source (engine room), calibration offset (°C).
-- Engine instance for 127489.
-- Device name and NMEA 2000 device instance.
+- Per probe: address, calibration (multiplier and offset, °C), alarm threshold and hysteresis (°C; threshold 0 = off, the default).
+- 127489: engine instance (default 0).
+- 130316 exhaust and engine room: temperature instance and source.
+- Digital inputs D2 (oil pressure alarm) and D3 (temperature alarm): enabled (default off) and invert. D1 is kept free for a tach input. Which pin level the HALMET reports for a high input voltage is not checked **(verify)**; the invert setting covers either.
 
 ### 6.2 WiFi
 
-- Station mode on the boat network; SensESP's setup hotspot when no network is configured.
-- Used for: configuration, OTA updates, debug view (each probe's address, raw reading, role, last N2K send).
+- Station mode on the boat network; SensESP's setup hotspot when no network is configured. Hostname `engine-temps`.
+- Used for: configuration, OTA updates, status page (each probe's reading and alarm state, unassigned probes, N2K messages sent).
+- OTA is enabled when `src/secrets.h` (gitignored) defines `OTA_PASSWORD`.
 - Data never depends on it.
 
 ### 6.3 NMEA 2000
 
-- Address claim and product information per the NMEA2000 library. Device class/function for a sensor/engine-monitoring device **(verify the right values)**.
+- Address claim and product information per the NMEA2000 library. Device function 140 (Engine), class 50 (Propulsion), manufacturer code 2046 and product code 104, as in the HALMET example **(verify these suit an engine temperature monitor)**.
 
 ### 6.4 Signal K client (optional, off by default)
 
-Only for data that can't be expressed on NMEA 2000, or to fix the path split in §5.2 if Signal K mapping can't. No such data in v1. When enabled it is an extra output; NMEA 2000 output is unchanged.
+Only for data that can't be expressed on NMEA 2000, or to fix the path split in §5.2 if Signal K mapping can't. No such data in v1, so the firmware creates no Signal K outputs. SensESP's Signal K client is part of the app framework and will still try to connect to a server it finds; approving or ignoring its access request has no effect on N2K output.
 
 ## 7. Phases
 
 1. **Desk: probes.** Start from the HALMET example firmware (SensESP, NMEA2000, NMEA2000_twai). 1-Wire on GPIO4 via SensESP OneWire. Debug view lists probe addresses and readings. Assign roles in config.
 2. **Desk: NMEA 2000.** 127489 and 130316 as above, checked on a test bus with `candump` + canboat `analyzer` (field values, instance, source, interval) and in Signal K's data browser.
 3. **Boat install.** Probes mounted, readings checked against a known thermometer at the mount points; engine instance set to match the RPM source; check what the chartplotter shows for exhaust and engine room (§5.2, §5.3) and set sources/instances accordingly. Log a baseline at idle and cruise.
-4. **Alarms.** Thresholds from the baseline. Coolant over threshold sets the 127489 "Over Temperature" status bit (Axiom raises "Generic engine alerts" from 127489). Exhaust over threshold: status bit or Signal K notification **(decide)**.
-5. **Later:** digital inputs for the engine's existing oil-pressure and temperature alarm lines (127489 status bits); analog oil pressure sender; tach input.
+4. **Alarms** (implemented, off by default). Set thresholds from the baseline. Coolant over threshold sets "Over Temperature", exhaust over threshold sets "Water Flow" (§5.1). The engine room alarm shows on the status page and display only; NMEA 2000 has no matching engine bit.
+5. **Engine panel inputs** (implemented, off by default): D2 oil pressure and D3 temperature warning lines to 127489 status bits. Measure the line voltages and check the panel is unaffected before enabling.
+6. **Later:** analog oil pressure sender; tach input on D1.
 
 ## 8. Build and test
 
-- PlatformIO, environment from the HALMET example (`halmet_espidf`).
-- Host tests for the pure logic: °C → K conversion and N2K scaling, role/address mapping, "not available" on stale data, power-on 85 °C discard.
+- PlatformIO, environment from the HALMET example (`halmet_espidf`): `pio run -e halmet_espidf`.
+- Host tests for the pure logic in `src/temperature_logic.h` (°C/K conversion, power-on 85 °C filter, alarm hysteresis): `pio test -e native`.
 - CI (GitHub Actions): firmware build + host tests.
 
 ## 9. Sources
