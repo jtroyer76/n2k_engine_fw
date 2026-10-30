@@ -34,7 +34,7 @@ To enable updates over WiFi, create `src/secrets.h` (gitignored):
 
 ## Setup
 
-1. On first boot the HALMET starts a WiFi hotspot; join it and set the boat network.
+1. On first boot the HALMET starts a WiFi hotspot named `engine-temps` (password `thisisfine`, SensESP's default). Join it, open http://192.168.4.1 and add one or more WiFi networks; it joins whichever is in range.
 2. Open `http://engine-temps.local`. Under Configuration, check which probe address each role (coolant, exhaust, engine room) picked up and correct it. Unused probes are listed on the status page. Changing an address needs a restart.
 3. Set the engine instance to match whatever sends RPM for this engine.
 4. After logging a baseline, set alarm thresholds.
