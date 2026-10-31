@@ -22,7 +22,7 @@ Status: 2026-10-30, phases 1, 2, 4 and the digital inputs of phase 5 implemented
 ## 3. Hardware
 
 - **Board:** Hat Labs HALMET — ESP32-WROOM-32E, isolated NMEA 2000 interface, 1-Wire header, 4 analog inputs (ADS1115), 4 digital inputs.
-- **1-Wire:** data pin "DQ" is GPIO4 (HALMET docs: "the 1-Wire data pin (labeled "DQ") is physically mapped to GPIO4"). The header ships unsoldered. Pull-up on the board: **(verify)** from the schematic.
+- **1-Wire:** data pin "DQ" is GPIO4 (HALMET docs: "the 1-Wire data pin (labeled "DQ") is physically mapped to GPIO4"). The header ships unsoldered. The board has the pull-up: 2.2 kΩ from 3.3 V to DQ (R801), plus a 100 Ω series resistor and 1 nF to ground on the header side (R802, C802; "low-pass required for network lengths longer than 1m") and ESD diodes on DQ and 3.3 V. No external pull-up needed. (HALMET v1.0.0 schematic, sheet "Onewire".)
 - **Probes:** DS18B20 waterproof probes, powered (3-wire) mode, not parasitic. Range −55 to +125 °C, so an exhaust probe goes on the water-cooled hose, never upstream of water injection.
 - **Wiring:** one 3-wire run from the HALMET to a junction near the engine; each probe's cable lands there.
 
@@ -119,6 +119,7 @@ Only for data that can't be expressed on NMEA 2000, or to fix the path split in 
 
 - HALMET example firmware (Apache-2.0): https://github.com/hatlabs/HALMET-example-firmware — `src/n2k_senders.h` (`N2kEngineParameterDynamicSender`), `platformio.ini` (SensESP ^3.5.0, NMEA2000-library ^4.17.2, NMEA2000_twai).
 - HALMET hardware docs: https://github.com/hatlabs/halmet (`docs/en/hardware/index.md`, 1-Wire on GPIO4).
+- HALMET v1.0.0 schematic: https://docs.hatlabs.fi/halmet/revisions/HALMET-v1.0.0-schema.pdf (sheet 5/12 "Onewire": R801, R802, C802, J801).
 - SensESP OneWire: https://github.com/SensESP/OneWire
 - Raymarine LightHouse 4 PGN support: https://docs.raymarine.com/81406/en-US/latest/NMEA2000PGNSupport-946047B8.html
 - Raymarine LH4 engine data items: https://docs.raymarine.com/81406/en-US/latest/EngineData-C78CBE53.html
